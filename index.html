@@ -1,0 +1,1203 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>手势打地鼠 - MediaPipe手势识别版</title>
+    <!-- Local runtime assets -->
+    <script src="libs/tailwindcss.min.js"></script>
+    <!-- MediaPipe Hands -->
+    <script src="libs/mediapipe/hands/hands.js" crossorigin="anonymous"></script>
+    <script src="libs/mediapipe/camera_utils.js" crossorigin="anonymous"></script>
+    <script src="libs/mediapipe/drawing_utils.js" crossorigin="anonymous"></script>
+    <style>
+        body { font-family: system-ui, -apple-system, BlinkMacSystemFont, "Segoe UI", "Microsoft YaHei", sans-serif; background-color: #e5e7eb; overflow: hidden; }
+        
+        .phone-frame {
+            border: 12px solid #111827;
+            border-radius: 3.5rem;
+            box-shadow: 0 30px 60px -12px rgba(0, 0, 0, 0.4);
+            background-color: #fff;
+            overflow: hidden;
+            width: 100%;
+            max-width: 380px;
+            height: 780px;
+            position: relative;
+            margin: 20px auto;
+        }
+
+        .screen { height: 100%; display: none; flex-direction: column; background: #fff; }
+        .screen.active { display: flex; }
+
+        .game-container {
+            position: relative;
+            flex: 1;
+            background: #111;
+            overflow: hidden;
+        }
+
+        #camera-feed {
+            position: absolute;
+            top: 0; left: 0;
+            width: 100%; height: 100%;
+            object-fit: cover;
+            transform: scaleX(-1);
+            filter: brightness(0.9) contrast(1.1);
+        }
+
+        #game-canvas {
+            position: absolute;
+            top: 0; left: 0;
+            width: 100%; height: 100%;
+            transform: scaleX(-1);
+            z-index: 10;
+        }
+
+        #buffer-canvas { display: none; }
+
+        .glass-panel {
+            background: rgba(255, 255, 255, 0.85);
+            backdrop-filter: blur(10px);
+            border-radius: 1.5rem;
+            border: 1px solid rgba(255, 255, 255, 0.3);
+        }
+
+        /* 设置页按钮样式 */
+        .setting-item {
+            display: flex;
+            justify-content: space-between;
+            align-items: center;
+            padding: 16px;
+            border-bottom: 1px solid #f3f4f6;
+            transition: background-color 0.2s;
+            cursor: pointer;
+        }
+        .setting-item:active { background-color: #f9fafb; }
+
+        input[type="range"] {
+            accent-color: #10b981;
+        }
+
+        /* 动画过渡 */
+        @keyframes pop {
+            0% { transform: scale(0.8); opacity: 0; }
+            100% { transform: scale(1); opacity: 1; }
+        }
+        .animate-pop { animation: pop 0.3s cubic-bezier(0.175, 0.885, 0.32, 1.275); }
+
+        /* 返回按钮统一样式 */
+        .back-btn {
+            background-color: #10b981;
+            color: white;
+            font-weight: bold;
+            padding: 12px 32px;
+            border-radius: 12px;
+            transition: all 0.3s ease;
+            box-shadow: 0 4px 6px -1px rgba(16, 185, 129, 0.3);
+        }
+        .back-btn:hover {
+            background-color: #059669;
+            transform: translateY(-2px);
+            box-shadow: 0 6px 12px -2px rgba(16, 185, 129, 0.4);
+        }
+        .back-btn:active {
+            transform: translateY(0);
+        }
+
+        /* 首页背景渐变 */
+        .home-bg {
+            background: linear-gradient(135deg, #667eea 0%, #764ba2 100%);
+        }
+
+        /* 移动端适配 */
+        @media (max-width: 480px) {
+            .phone-frame {
+                max-width: 100%;
+                height: 100vh;
+                height: 100dvh; /* 动态视口高度，避免移动端浏览器地址栏影响 */
+                border: 0;
+                border-radius: 0;
+                margin: 0;
+            }
+            body {
+                margin: 0;
+                padding: 0;
+            }
+        }
+    </style>
+</head>
+<body class="flex items-center justify-center min-h-screen">
+
+    <div class="phone-frame">
+        <!-- 0. 游戏介绍首页 -->
+        <div id="screen-home" class="screen active">
+            <div class="flex-1 home-bg flex flex-col items-center justify-center p-8 text-center">
+                <div class="w-24 h-24 bg-white/20 rounded-3xl flex items-center justify-center mb-6 animate-pop">
+                    <span class="text-6xl">🐹</span>
+                </div>
+                <h1 class="text-3xl font-black text-white mb-3">手势打地鼠</h1>
+                <p class="text-white/80 text-sm mb-2">Motion Capture Whack-a-Mole</p>
+                <div class="bg-white/10 rounded-2xl p-4 mb-8 mt-4">
+                    <p class="text-white/90 text-xs leading-relaxed">
+                        🎯 <strong>游戏玩法</strong><br>
+                        通过摄像头捕捉您的手部动作<br>
+                        对准地鼠框挥手即可击打得分<br><br>
+                        ⚡ <strong>游戏特色</strong><br>
+                        • 实时动作捕捉识别<br>
+                        • 多种难度级别可选<br>
+                        • 灵敏度自由调节<br><br>
+                        💡 <strong>温馨提示</strong><br>
+                        请在光线充足的环境中游玩<br>
+                        游戏需要使用摄像头权限
+                    </p>
+                </div>
+                <button onclick="showScreen('game')" class="w-full bg-white text-purple-600 font-bold py-4 rounded-2xl shadow-lg active:scale-95 transition-transform mb-4">
+                    🎮 开始游戏
+                </button>
+                <div class="flex gap-4 w-full">
+                    <button onclick="showScreen('settings-main')" class="flex-1 bg-white/20 text-white font-bold py-3 rounded-xl active:scale-95 transition-transform">
+                        ⚙️ 设置
+                    </button>
+                    <button onclick="showScreen('stats')" class="flex-1 bg-white/20 text-white font-bold py-3 rounded-xl active:scale-95 transition-transform">
+                        📊 排行
+                    </button>
+                </div>
+            </div>
+        </div>
+
+        <!-- 1. 游戏主界面 -->
+        <div id="screen-game" class="screen">
+            <div class="p-4 pt-6 flex justify-between items-center border-b z-20">
+                <div class="flex flex-col">
+                    <span class="text-[10px] text-gray-400 font-bold uppercase tracking-widest">Active System</span>
+                    <h1 class="font-bold text-sm text-gray-800">动作捕捉打地鼠</h1>
+                </div>
+                <div class="bg-green-50 px-4 py-1.5 rounded-full border border-green-100">
+                    <span id="current-score" class="text-green-600 font-black text-sm">0</span>
+                </div>
+            </div>
+            
+            <div class="game-container">
+                <video id="camera-feed" autoplay playsinline></video>
+                <canvas id="game-canvas"></canvas>
+                <canvas id="buffer-canvas"></canvas>
+                
+                <div id="game-overlay" class="absolute inset-0 bg-black/40 flex items-center justify-center p-6 text-center z-30 transition-opacity duration-300">
+                    <div class="glass-panel p-8 shadow-2xl w-full animate-pop">
+                        <div class="w-16 h-16 bg-green-100 rounded-2xl flex items-center justify-center mx-auto mb-4">
+                            <span class="text-3xl">🎮</span>
+                        </div>
+                        <h2 id="overlay-title" class="text-xl font-bold mb-2 text-gray-900">准备战斗</h2>
+                        <p id="overlay-desc" class="text-gray-500 mb-8 text-xs leading-relaxed">对着地鼠框挥手即可击打<br>请确保在光线充足的环境中游玩</p>
+                        <button id="start-btn" class="w-full bg-gray-900 text-white font-bold py-4 rounded-2xl shadow-lg active:scale-95 transition-transform">
+                            启动感应器
+                        </button>
+                    </div>
+                </div>
+            </div>
+
+            <!-- 底部导航 -->
+            <div class="p-4 bg-white border-t flex justify-around items-center">
+                <button onclick="showScreen('home')" class="flex flex-col items-center text-gray-400 hover:text-gray-600">
+                    <span class="text-xl">🏠</span>
+                    <span class="text-[10px] font-bold mt-1">首页</span>
+                </button>
+                <button onclick="showScreen('game')" class="flex flex-col items-center text-green-600">
+                    <span class="text-xl">🎯</span>
+                    <span class="text-[10px] font-bold mt-1">游戏</span>
+                </button>
+                <button onclick="showScreen('settings-main')" class="flex flex-col items-center text-gray-400 hover:text-gray-600">
+                    <span class="text-xl">⚙️</span>
+                    <span class="text-[10px] font-bold mt-1">设置</span>
+                </button>
+                <button onclick="showScreen('stats')" class="flex flex-col items-center text-gray-400 hover:text-gray-600">
+                    <span class="text-xl">📊</span>
+                    <span class="text-[10px] font-bold mt-1">排行</span>
+                </button>
+            </div>
+        </div>
+
+        <!-- 2. 设置主页 -->
+        <div id="screen-settings-main" class="screen bg-gray-50">
+            <div class="p-6 border-b bg-white flex items-center">
+                <h1 class="font-bold text-lg">系统设置</h1>
+            </div>
+            <div class="flex-1 overflow-y-auto">
+                <div class="mt-4 bg-white border-y">
+                    <div onclick="showScreen('settings-difficulty')" class="setting-item">
+                        <div class="flex items-center">
+                            <span class="mr-3">⚡</span>
+                            <span class="font-medium text-gray-700">难度设置</span>
+                        </div>
+                        <span class="text-gray-400 text-sm" id="label-difficulty">中等 ></span>
+                    </div>
+                    <div onclick="showScreen('settings-calibration')" class="setting-item">
+                        <div class="flex items-center">
+                            <span class="mr-3">👁️</span>
+                            <span class="font-medium text-gray-700">感应校准</span>
+                        </div>
+                        <span class="text-gray-400 text-sm">灵敏度 ></span>
+                    </div>
+                    <div class="setting-item">
+                        <div class="flex items-center">
+                            <span class="mr-3">🔊</span>
+                            <span class="font-medium text-gray-700">音效反馈</span>
+                        </div>
+                        <input type="checkbox" checked class="w-5 h-5 rounded">
+                    </div>
+                </div>
+                <!-- 返回按钮放在页面中间 -->
+                <div class="p-6 flex justify-center">
+                    <button onclick="showScreen('home')" class="back-btn">
+                        ← 返回首页
+                    </button>
+                </div>
+            </div>
+            <!-- 底部导航 -->
+            <div class="p-4 bg-white border-t flex justify-around items-center">
+                <button onclick="showScreen('home')" class="flex flex-col items-center text-gray-400 hover:text-gray-600">
+                    <span class="text-xl">🏠</span>
+                    <span class="text-[10px] font-bold mt-1">首页</span>
+                </button>
+                <button onclick="showScreen('game')" class="flex flex-col items-center text-gray-400 hover:text-gray-600">
+                    <span class="text-xl">🎯</span>
+                    <span class="text-[10px] font-bold mt-1">游戏</span>
+                </button>
+                <button onclick="showScreen('settings-main')" class="flex flex-col items-center text-green-600">
+                    <span class="text-xl">⚙️</span>
+                    <span class="text-[10px] font-bold mt-1">设置</span>
+                </button>
+                <button onclick="showScreen('stats')" class="flex flex-col items-center text-gray-400 hover:text-gray-600">
+                    <span class="text-xl">📊</span>
+                    <span class="text-[10px] font-bold mt-1">排行</span>
+                </button>
+            </div>
+        </div>
+
+        <!-- 3. 难度详情页 -->
+        <div id="screen-settings-difficulty" class="screen bg-white">
+            <div class="p-6 border-b flex items-center justify-center">
+                <h1 class="font-bold text-lg">难度级别</h1>
+            </div>
+            <div class="flex-1 overflow-y-auto p-6 space-y-6">
+                <div>
+                    <label class="text-xs font-bold text-gray-400 uppercase tracking-widest block mb-4">地鼠出现频率</label>
+                    <div class="grid grid-cols-3 gap-2">
+                        <button onclick="setDifficulty(2500, '简单')" class="diff-btn py-3 border-2 border-gray-100 rounded-xl text-sm font-bold">简单</button>
+                        <button onclick="setDifficulty(1500, '中等')" class="diff-btn py-3 border-2 border-green-500 bg-green-50 text-green-700 rounded-xl text-sm font-bold">中等</button>
+                        <button onclick="setDifficulty(800, '疯狂')" class="diff-btn py-3 border-2 border-gray-100 rounded-xl text-sm font-bold">疯狂</button>
+                    </div>
+                </div>
+                <div>
+                    <label class="text-xs font-bold text-gray-400 uppercase tracking-widest block mb-4">存活时间 (秒)</label>
+                    <input type="range" id="input-life" min="1000" max="5000" step="500" value="3000" class="w-full">
+                    <div class="flex justify-between text-[10px] text-gray-400 mt-2 font-bold">
+                        <span>极速</span><span>标准</span><span>悠闲</span>
+                    </div>
+                </div>
+                <p class="text-xs text-gray-400 leading-relaxed bg-gray-50 p-4 rounded-xl">
+                    提示：设置越高，系统对动作识别的要求越高。如果觉得难以击中，请尝试"悠闲"模式。
+                </p>
+                <!-- 返回按钮放在页面中间 -->
+                <div class="flex justify-center pt-4">
+                    <button onclick="showScreen('settings-main')" class="back-btn">
+                        ← 返回设置
+                    </button>
+                </div>
+            </div>
+            <!-- 底部导航 -->
+            <div class="p-4 bg-white border-t flex justify-around items-center">
+                <button onclick="showScreen('home')" class="flex flex-col items-center text-gray-400 hover:text-gray-600">
+                    <span class="text-xl">🏠</span>
+                    <span class="text-[10px] font-bold mt-1">首页</span>
+                </button>
+                <button onclick="showScreen('game')" class="flex flex-col items-center text-gray-400 hover:text-gray-600">
+                    <span class="text-xl">🎯</span>
+                    <span class="text-[10px] font-bold mt-1">游戏</span>
+                </button>
+                <button onclick="showScreen('settings-main')" class="flex flex-col items-center text-green-600">
+                    <span class="text-xl">⚙️</span>
+                    <span class="text-[10px] font-bold mt-1">设置</span>
+                </button>
+                <button onclick="showScreen('stats')" class="flex flex-col items-center text-gray-400 hover:text-gray-600">
+                    <span class="text-xl">📊</span>
+                    <span class="text-[10px] font-bold mt-1">排行</span>
+                </button>
+            </div>
+        </div>
+
+        <!-- 4. 校准详情页 -->
+        <div id="screen-settings-calibration" class="screen bg-white">
+            <div class="p-6 border-b flex items-center justify-center">
+                <h1 class="font-bold text-lg">感应校准</h1>
+            </div>
+            <div class="flex-1 overflow-y-auto p-6">
+                <!-- 实时预览区域（基于 MediaPipe 手势识别） -->
+                <div id="preview-container" class="aspect-video bg-black rounded-2xl overflow-hidden mb-4 relative border-4 border-transparent transition-all duration-200">
+                    <video id="calibration-video" autoplay playsinline class="w-full h-full object-cover" style="transform: scaleX(-1);"></video>
+                    <canvas id="calibration-canvas" class="absolute inset-0 w-full h-full"></canvas>
+                    <div id="calibration-placeholder" class="absolute inset-0 flex flex-col items-center justify-center text-center px-4">
+                        <span class="text-white/70 text-xs font-semibold mb-2">点击下方按钮启动预览</span>
+                        <span class="text-white/50 text-[10px] leading-relaxed">
+                            伸出一只手，保持在画面中央<br>
+                            系统会显示手部骨架和食指指尖位置
+                        </span>
+                    </div>
+                </div>
+                
+                <!-- 启动/停止预览按钮 -->
+                <div class="flex gap-2 mb-4">
+                    <button id="start-calibration-btn" onclick="startCalibrationPreview()" class="flex-1 py-2 bg-green-500 text-white font-bold rounded-xl hover:bg-green-600 transition-colors text-sm">
+                        📷 启动预览
+                    </button>
+                    <button id="stop-calibration-btn" onclick="stopCalibrationPreview()" class="flex-1 py-2 bg-red-500 text-white font-bold rounded-xl hover:bg-red-600 transition-colors text-sm hidden">
+                        ⏹️ 停止预览
+                    </button>
+                </div>
+                
+                <label class="text-xs font-bold text-gray-400 uppercase tracking-widest block mb-4">击中判定范围</label>
+                <input type="range" id="input-threshold" min="20" max="80" value="40" class="w-full">
+                <div class="flex justify-between text-[10px] text-gray-400 mt-1">
+                    <span>精确击打（范围小）</span>
+                    <span>当前: <span id="val-threshold">40</span> 像素</span>
+                    <span>宽松击打（范围大）</span>
+                </div>
+                <p class="text-[10px] text-center text-gray-500 mt-2 font-semibold">
+                    💡 当前食指圆圈半径 ≈ 游戏击中范围
+                </p>
+
+                <label class="text-xs font-bold text-gray-400 uppercase tracking-widest block mb-4 mt-6">左右位置校准</label>
+                <input type="range" id="input-x-offset" min="-320" max="320" value="0" step="5" class="w-full">
+                <div class="flex justify-between text-[10px] text-gray-400 mt-1">
+                    <span>向左</span>
+                    <span>当前: <span id="val-x-offset">0</span> 像素</span>
+                    <span>向右</span>
+                </div>
+
+                <label class="text-xs font-bold text-gray-400 uppercase tracking-widest block mb-4 mt-6">游戏画面左右校准</label>
+                <input type="range" id="input-game-x-offset" min="-320" max="320" value="0" step="5" class="w-full">
+                <div class="flex justify-between text-[10px] text-gray-400 mt-1">
+                    <span>向左</span>
+                    <span>当前: <span id="val-game-x-offset">0</span> 像素</span>
+                    <span>向右</span>
+                </div>
+                
+                <!-- 手势识别状态 -->
+                <div class="mt-4 p-3 bg-gray-50 rounded-xl">
+                    <p class="text-xs text-gray-500 mb-2">📊 手势识别状态</p>
+                    <div class="flex justify-between text-[10px]">
+                        <span class="text-gray-400">当前识别：</span>
+                        <span id="calibration-status" class="font-bold text-green-600">未开始预览</span>
+                    </div>
+                    <div class="flex justify-between text-[10px] mt-1">
+                        <span class="text-gray-400">检测到的手数：</span>
+                        <span id="calibration-hand-count" class="font-bold text-blue-600">0</span>
+                    </div>
+                </div>
+                
+                <p class="text-[10px] text-center text-gray-400 mt-4 italic leading-relaxed">
+                    💡 提示：在预览中伸出一只手，对着屏幕做出挥打动作；<br>
+                    预览正确但正式游戏偏移时，只调“游戏画面左右校准”。
+                </p>
+                
+                <!-- 返回按钮放在页面中间 -->
+                <div class="flex justify-center mt-6">
+                    <button onclick="stopCalibrationPreview(); showScreen('settings-main')" class="back-btn">
+                        ← 返回设置
+                    </button>
+                </div>
+            </div>
+            <!-- 底部导航 -->
+            <div class="p-4 bg-white border-t flex justify-around items-center">
+                <button onclick="showScreen('home')" class="flex flex-col items-center text-gray-400 hover:text-gray-600">
+                    <span class="text-xl">🏠</span>
+                    <span class="text-[10px] font-bold mt-1">首页</span>
+                </button>
+                <button onclick="showScreen('game')" class="flex flex-col items-center text-gray-400 hover:text-gray-600">
+                    <span class="text-xl">🎯</span>
+                    <span class="text-[10px] font-bold mt-1">游戏</span>
+                </button>
+                <button onclick="showScreen('settings-main')" class="flex flex-col items-center text-green-600">
+                    <span class="text-xl">⚙️</span>
+                    <span class="text-[10px] font-bold mt-1">设置</span>
+                </button>
+                <button onclick="showScreen('stats')" class="flex flex-col items-center text-gray-400 hover:text-gray-600">
+                    <span class="text-xl">📊</span>
+                    <span class="text-[10px] font-bold mt-1">排行</span>
+                </button>
+            </div>
+        </div>
+
+        <!-- 5. 统计/排行 -->
+        <div id="screen-stats" class="screen bg-gray-50">
+            <div class="p-6 border-b bg-white flex items-center justify-center">
+                <h1 class="font-bold text-lg">荣誉殿堂</h1>
+            </div>
+            <div class="flex-1 p-6 overflow-y-auto">
+                <div class="bg-white rounded-3xl p-6 shadow-sm mb-4 border border-gray-100 flex items-center justify-between">
+                    <div>
+                        <p class="text-[10px] font-bold text-gray-400 uppercase">Personal Best</p>
+                        <p class="text-3xl font-black text-gray-900" id="best-score">0</p>
+                    </div>
+                    <div class="text-4xl">👑</div>
+                </div>
+                <div id="score-history" class="space-y-2">
+                    <!-- 动态生成 -->
+                    <div class="p-4 bg-white rounded-2xl border border-gray-100 flex justify-between items-center opacity-50">
+                        <span class="text-xs font-bold text-gray-400">暂无比赛数据</span>
+                        <span class="text-xs text-gray-300"># -</span>
+                    </div>
+                </div>
+                <!-- 返回按钮放在页面中间 -->
+                <div class="flex justify-center mt-8">
+                    <button onclick="showScreen('home')" class="back-btn">
+                        ← 返回首页
+                    </button>
+                </div>
+            </div>
+            <!-- 底部导航 -->
+            <div class="p-4 bg-white border-t flex justify-around items-center">
+                <button onclick="showScreen('home')" class="flex flex-col items-center text-gray-400 hover:text-gray-600">
+                    <span class="text-xl">🏠</span>
+                    <span class="text-[10px] font-bold mt-1">首页</span>
+                </button>
+                <button onclick="showScreen('game')" class="flex flex-col items-center text-gray-400 hover:text-gray-600">
+                    <span class="text-xl">🎯</span>
+                    <span class="text-[10px] font-bold mt-1">游戏</span>
+                </button>
+                <button onclick="showScreen('settings-main')" class="flex flex-col items-center text-gray-400 hover:text-gray-600">
+                    <span class="text-xl">⚙️</span>
+                    <span class="text-[10px] font-bold mt-1">设置</span>
+                </button>
+                <button onclick="showScreen('stats')" class="flex flex-col items-center text-green-600">
+                    <span class="text-xl">📊</span>
+                    <span class="text-[10px] font-bold mt-1">排行</span>
+                </button>
+            </div>
+        </div>
+    </div>
+
+    <script>
+        const video = document.getElementById('camera-feed');
+        const canvas = document.getElementById('game-canvas');
+        const ctx = canvas.getContext('2d');
+        const buffer = document.getElementById('buffer-canvas');
+        const bCtx = buffer.getContext('2d');
+        
+        // 核心游戏状态
+        let score = 0;
+        let gameActive = false;
+        let moles = [];
+        let bestScore = 0;
+        
+        // 手部追踪状态
+        let hands = null;
+        let handLandmarks = [];
+        let lastHandPositions = [];
+        
+        // 游戏历史记录（保存在内存中）
+        let gameHistory = [];
+
+        // 设置参数
+        let config = {
+            spawnInterval: 1500,
+            moleLife: 3000,
+            // 使用手势版后，threshold 表示“击中判定范围”（像素半径），而不是像素运动阈值
+            threshold: 40,
+            xOffset: parseInt(localStorage.getItem('gestureGameXOffset') || '0'),
+            gameXOffset: parseInt(localStorage.getItem('gestureGamePlayXOffsetFull') || '0'),
+            difficultyLabel: '中等'
+        };
+
+        function getVideoDisplayRect(videoEl, outW, outH) {
+            const vw = videoEl.videoWidth;
+            const vh = videoEl.videoHeight;
+            if (!vw || !vh || !outW || !outH) {
+                return { x: 0, y: 0, width: outW, height: outH };
+            }
+
+            const videoRatio = vw / vh;
+            const boxRatio = outW / outH;
+            let drawW, drawH, offsetX, offsetY;
+
+            if (videoRatio > boxRatio) {
+                drawH = outH;
+                drawW = outH * videoRatio;
+                offsetX = (outW - drawW) / 2;
+                offsetY = 0;
+            } else {
+                drawW = outW;
+                drawH = outW / videoRatio;
+                offsetX = 0;
+                offsetY = (outH - drawH) / 2;
+            }
+
+            return { x: offsetX, y: offsetY, width: drawW, height: drawH };
+        }
+
+        /**
+         * 将 MediaPipe 归一化坐标映射到画布/预览区像素坐标。
+         * 正式游戏参考手势案例：视频和 canvas 一起镜像，绘制时使用原始 x。
+         * 校准页保持原来的手动翻转，因为当前预览已准确。
+         * 校准页和正式游戏页比例不同，所以左右位置微调分开保存。
+         */
+        function mapLandmarkToDisplay(landmark, videoEl, outW, outH) {
+            const vw = videoEl.videoWidth;
+            const vh = videoEl.videoHeight;
+            const isGameVideo = videoEl.id === 'camera-feed';
+            const xOffset = isGameVideo ? config.gameXOffset : config.xOffset;
+            if (!vw || !vh || !outW || !outH) {
+                const x = isGameVideo ? landmark.x * outW - xOffset : (1 - landmark.x) * outW + xOffset;
+                return { x, y: landmark.y * outH };
+            }
+
+            const displayRect = getVideoDisplayRect(videoEl, outW, outH);
+            const scale = displayRect.width / vw;
+            const px = (isGameVideo ? landmark.x : 1 - landmark.x) * vw;
+            const py = landmark.y * vh;
+
+            return {
+                x: px * scale + displayRect.x + (isGameVideo ? -xOffset : xOffset),
+                y: py * scale + displayRect.y
+            };
+        }
+
+        function setupCanvas() {
+            const parent = canvas.parentElement;
+            if (!parent) return;
+            canvas.width = parent.clientWidth;
+            canvas.height = parent.clientHeight;
+            buffer.width = 80;
+            buffer.height = 60;
+        }
+
+        function bindLayoutObserver() {
+            const container = canvas.parentElement;
+            if (!container || container._layoutObserved) return;
+            container._layoutObserved = true;
+            new ResizeObserver(() => {
+                if (document.getElementById('screen-game').classList.contains('active')) {
+                    setupCanvas();
+                }
+            }).observe(container);
+        }
+
+        // UI 导航
+        function showScreen(screenId) {
+            document.querySelectorAll('.screen').forEach(s => s.classList.remove('active'));
+            document.getElementById('screen-' + screenId).classList.add('active');
+            
+            // 如果离开游戏屏，则确保游戏停止
+            if(screenId !== 'game') {
+                stopGame();
+            }
+        }
+
+        function setDifficulty(interval, label) {
+            config.spawnInterval = interval;
+            config.difficultyLabel = label;
+            document.getElementById('label-difficulty').innerText = label + ' >';
+            document.querySelectorAll('.diff-btn').forEach(btn => {
+                btn.classList.remove('border-green-500', 'bg-green-50', 'text-green-700');
+                btn.classList.add('border-gray-100');
+                if(btn.innerText === label) {
+                    btn.classList.add('border-green-500', 'bg-green-50', 'text-green-700');
+                    btn.classList.remove('border-gray-100');
+                }
+            });
+        }
+
+        // 初始化 MediaPipe Hands
+        function initMediaPipeHands() {
+            hands = new Hands({
+                locateFile: (file) => {
+                    return `libs/mediapipe/hands/${file}`;
+                }
+            });
+            
+            hands.setOptions({
+                maxNumHands: 2,
+                modelComplexity: 1,
+                minDetectionConfidence: 0.5,
+                minTrackingConfidence: 0.5
+            });
+            
+            hands.onResults(onHandResults);
+        }
+        
+        // 处理手部检测结果
+        function onHandResults(results) {
+            if (!gameActive) return;
+            
+            handLandmarks = results.multiHandLandmarks || [];
+            
+            // 绘制手部骨架
+            ctx.clearRect(0, 0, canvas.width, canvas.height);
+            
+            if (handLandmarks.length > 0) {
+                for (const landmarks of handLandmarks) {
+                    // 绘制手部连接线
+                    drawHandConnections(landmarks);
+                    
+                    // 使用食指指尖（索引8）进行碰撞检测
+                    const indexTip = landmarks[8];
+                    const { x, y } = mapLandmarkToDisplay(indexTip, video, canvas.width, canvas.height);
+                    
+                    // 绘制指尖位置
+                    ctx.fillStyle = '#10b981';
+                    ctx.beginPath();
+                    ctx.arc(x, y, 15, 0, Math.PI * 2);
+                    ctx.fill();
+                    
+                    // 检测击中
+                    checkHit(x, y);
+                }
+            }
+            
+            // 绘制地鼠
+            drawMoles();
+        }
+        
+        // 绘制手部连接线
+        function drawHandConnections(landmarks) {
+            const connections = [
+                [0, 1], [1, 2], [2, 3], [3, 4],  // 拇指
+                [0, 5], [5, 6], [6, 7], [7, 8],  // 食指
+                [0, 9], [9, 10], [10, 11], [11, 12],  // 中指
+                [0, 13], [13, 14], [14, 15], [15, 16],  // 无名指
+                [0, 17], [17, 18], [18, 19], [19, 20],  // 小指
+                [5, 9], [9, 13], [13, 17]  // 手掌
+            ];
+            
+            ctx.strokeStyle = 'rgba(16, 185, 129, 0.6)';
+            ctx.lineWidth = 2;
+            
+            for (const [i, j] of connections) {
+                const p1 = mapLandmarkToDisplay(landmarks[i], video, canvas.width, canvas.height);
+                const p2 = mapLandmarkToDisplay(landmarks[j], video, canvas.width, canvas.height);
+                const x1 = p1.x, y1 = p1.y, x2 = p2.x, y2 = p2.y;
+                
+                ctx.beginPath();
+                ctx.moveTo(x1, y1);
+                ctx.lineTo(x2, y2);
+                ctx.stroke();
+            }
+            
+            // 绘制关键点
+            ctx.fillStyle = 'rgba(255, 255, 255, 0.8)';
+            for (const landmark of landmarks) {
+                const { x, y } = mapLandmarkToDisplay(landmark, video, canvas.width, canvas.height);
+                ctx.beginPath();
+                ctx.arc(x, y, 4, 0, Math.PI * 2);
+                ctx.fill();
+            }
+        }
+
+        // 初始化摄像头并启动手势检测
+        async function initCamera() {
+            try {
+                const stream = await navigator.mediaDevices.getUserMedia({
+                    video: { width: {ideal: 640}, height: {ideal: 360}, facingMode: "user" }
+                });
+                video.srcObject = stream;
+                
+                // 等待视频加载
+                await new Promise(resolve => {
+                    video.onloadedmetadata = resolve;
+                });
+                setupCanvas();
+
+                // 初始化 MediaPipe Hands
+                initMediaPipeHands();
+                
+                return true;
+            } catch (err) {
+                alert('无法访问摄像头，请确保已授予摄像头权限。');
+                return false;
+            }
+        }
+
+        function spawnMole() {
+            if (!gameActive) return;
+            const size = 80;
+            moles.push({
+                x: Math.random() * (canvas.width - 120) + 60,
+                y: Math.random() * (canvas.height - 120) + 60,
+                size: size,
+                life: config.moleLife,
+                maxLife: config.moleLife,
+                hit: false,
+                popScale: 0
+            });
+            setTimeout(spawnMole, config.spawnInterval);
+        }
+
+        // 手势检测循环
+        async function detectHands() {
+            if (!gameActive || !hands) return;
+            
+            if (video.readyState >= 2) {
+                await hands.send({image: video});
+            }
+            
+            requestAnimationFrame(detectHands);
+        }
+        
+        // 绘制地鼠
+        function drawMoles() {
+            moles = moles.filter(m => {
+                m.life -= 16;
+                if (m.life > 0) {
+                    if(m.popScale < 1) m.popScale += 0.1;
+
+                    ctx.save();
+                    ctx.translate(m.x + m.size/2, m.y + m.size/2);
+                    ctx.scale(m.popScale, m.popScale);
+
+                    ctx.strokeStyle = m.hit ? '#f87171' : 'rgba(255,255,255,0.8)';
+                    ctx.lineWidth = 4;
+                    ctx.lineCap = 'round';
+                    ctx.strokeRect(-m.size/2, -m.size/2, m.size, m.size);
+                    
+                    ctx.font = "50px Arial";
+                    ctx.textAlign = "center";
+                    ctx.textBaseline = "middle";
+                    ctx.fillText(m.hit ? "💥" : "🐹", 0, 0);
+                    
+                    ctx.restore();
+                    return true;
+                }
+                return false;
+            });
+        }
+
+        function checkHit(x, y) {
+            const r = config.threshold; // 作为“击中判定范围”使用
+            moles.forEach(m => {
+                if (!m.hit && x > m.x - r && x < m.x + m.size + r && y > m.y - r && y < m.y + m.size + r) {
+                    m.hit = true;
+                    m.life = 500; // 爆炸动画持续时间
+                    score += 10;
+                    document.getElementById('current-score').innerText = score;
+                }
+            });
+        }
+
+        // 备用绘制循环（当手势检测未激活时使用）
+        function draw() {
+            if (!gameActive) return;
+            
+            // 如果手势检测正在运行，不需要单独的绘制循环
+            // 因为 onHandResults 会处理绘制
+            if (hands && handLandmarks.length > 0) {
+                requestAnimationFrame(draw);
+                return;
+            }
+            
+            ctx.clearRect(0, 0, canvas.width, canvas.height);
+            drawMoles();
+            requestAnimationFrame(draw);
+        }
+
+        function stopGame() {
+            gameActive = false;
+            document.getElementById('game-overlay').classList.remove('hidden');
+        }
+        
+        // 根据分数获取评价
+        function getScoreRating(score) {
+            if (score >= 150) return { text: '🏆 传奇', color: 'text-purple-600' };
+            if (score >= 120) return { text: '⭐ 优秀', color: 'text-yellow-600' };
+            if (score >= 90) return { text: '👍 良好', color: 'text-green-600' };
+            if (score >= 60) return { text: '📈 中等', color: 'text-blue-600' };
+            if (score >= 30) return { text: '💪 需努力', color: 'text-orange-600' };
+            return { text: '🌱 新手', color: 'text-gray-500' };
+        }
+        
+        // 保存游戏记录到内存
+        function saveGameRecord(finalScore) {
+            const rating = getScoreRating(finalScore);
+            const record = {
+                score: finalScore,
+                date: new Date().toLocaleString('zh-CN'),
+                difficulty: config.difficultyLabel,
+                rating: rating.text,
+                ratingColor: rating.color
+            };
+            gameHistory.push(record);
+            // 只保留最近20条记录（排序后会取前10条显示）
+            if (gameHistory.length > 20) {
+                gameHistory = gameHistory.slice(-20);
+            }
+            updateScoreHistory();
+        }
+        
+        // 更新排行榜显示
+        function updateScoreHistory() {
+            const historyContainer = document.getElementById('score-history');
+            if (gameHistory.length === 0) {
+                historyContainer.innerHTML = `
+                    <div class="p-4 bg-white rounded-2xl border border-gray-100 flex justify-between items-center opacity-50">
+                        <span class="text-xs font-bold text-gray-400">暂无比赛数据</span>
+                        <span class="text-xs text-gray-300"># -</span>
+                    </div>
+                `;
+            } else {
+                // 按分数从高到低排序
+                const sortedHistory = [...gameHistory].sort((a, b) => b.score - a.score);
+                // 只显示前10条
+                const top10 = sortedHistory.slice(0, 10);
+                
+                historyContainer.innerHTML = top10.map((record, index) => {
+                    const rating = getScoreRating(record.score);
+                    return `
+                    <div class="p-4 bg-white rounded-2xl border border-gray-100 flex justify-between items-center">
+                        <div class="flex items-center gap-2">
+                            <span class="text-xs font-bold text-gray-400 w-6">#${index + 1}</span>
+                            <div>
+                                <span class="text-sm font-bold text-gray-800">${record.score} 分</span>
+                                <span class="text-xs ${rating.color} ml-2 font-semibold">${rating.text}</span>
+                            </div>
+                        </div>
+                        <div class="text-right">
+                            <span class="text-xs text-gray-400">${record.date}</span>
+                        </div>
+                    </div>
+                `;
+                }).join('');
+            }
+        }
+
+        document.getElementById('start-btn').onclick = async () => {
+            if (await initCamera()) {
+                setupCanvas();
+                document.getElementById('game-overlay').classList.add('hidden');
+                score = 0;
+                moles = []; // 清空地鼠数组
+                document.getElementById('current-score').innerText = "0";
+                gameActive = true;
+                
+                // 启动地鼠生成
+                spawnMole();
+                
+                // 启动手势检测循环
+                detectHands();
+                
+                // 启动备用绘制循环（当手势未检测到时绘制地鼠）
+                draw();
+                
+                // 游戏时长15秒
+                setTimeout(() => {
+                    gameActive = false;
+                    document.getElementById('game-overlay').classList.remove('hidden');
+                    document.getElementById('overlay-title').innerText = "战斗报告";
+                    document.getElementById('overlay-desc').innerHTML = `最终得分: <span class="text-2xl font-black text-green-600">${score}</span> 分`;
+                    document.getElementById('start-btn').innerText = "再来一局";
+                    
+                    // 保存游戏记录
+                    saveGameRecord(score);
+                    
+                    if(score > bestScore) {
+                        bestScore = score;
+                        document.getElementById('best-score').innerText = bestScore;
+                    }
+                }, 15000);
+            }
+        };
+
+        document.getElementById('input-life').oninput = (e) => config.moleLife = parseInt(e.target.value);
+        document.getElementById('input-threshold').oninput = (e) => {
+            config.threshold = parseInt(e.target.value);
+            document.getElementById('val-threshold').innerText = config.threshold;
+            // 如果校准预览正在运行，触发重绘以更新圆圈半径
+            if (calibrationActive && calibrationHands && calibrationVideo.readyState >= 2) {
+                calibrationHands.send({ image: calibrationVideo });
+            }
+        };
+        document.getElementById('input-x-offset').oninput = (e) => {
+            config.xOffset = parseInt(e.target.value);
+            document.getElementById('val-x-offset').innerText = config.xOffset;
+            localStorage.setItem('gestureGameXOffset', config.xOffset.toString());
+            if (calibrationActive && calibrationHands && calibrationVideo.readyState >= 2) {
+                calibrationHands.send({ image: calibrationVideo });
+            }
+        };
+        document.getElementById('input-game-x-offset').oninput = (e) => {
+            config.gameXOffset = parseInt(e.target.value);
+            document.getElementById('val-game-x-offset').innerText = config.gameXOffset;
+            localStorage.setItem('gestureGamePlayXOffsetFull', config.gameXOffset.toString());
+        };
+
+        // ========== 手势版校准预览功能 ==========
+        const calibrationVideo = document.getElementById('calibration-video');
+        const calibrationCanvas = document.getElementById('calibration-canvas');
+        const calibrationCtx = calibrationCanvas.getContext('2d');
+
+        let calibrationStream = null;
+        let calibrationActive = false;
+        let calibrationHands = null;
+
+        const calibrationStatus = document.getElementById('calibration-status');
+        const calibrationHandCount = document.getElementById('calibration-hand-count');
+
+        // 校准页面的地鼠图标状态
+        let calibrationMole = {
+            x: 0,
+            y: 0,
+            size: 80,
+            hit: false,
+            hitAnimationTime: 0
+        };
+
+        function initCalibrationHands() {
+            calibrationHands = new Hands({
+                locateFile: (file) => {
+                    return `libs/mediapipe/hands/${file}`;
+                }
+            });
+
+            calibrationHands.setOptions({
+                maxNumHands: 2,
+                modelComplexity: 1,
+                minDetectionConfidence: 0.5,
+                minTrackingConfidence: 0.5
+            });
+
+            calibrationHands.onResults(onCalibrationResults);
+        }
+
+        function drawCalibrationHand(landmarks) {
+            const width = calibrationCanvas.clientWidth || calibrationCanvas.width;
+            const height = calibrationCanvas.clientHeight || calibrationCanvas.height;
+
+            const connections = [
+                [0, 1], [1, 2], [2, 3], [3, 4],
+                [0, 5], [5, 6], [6, 7], [7, 8],
+                [0, 9], [9, 10], [10, 11], [11, 12],
+                [0, 13], [13, 14], [14, 15], [15, 16],
+                [0, 17], [17, 18], [18, 19], [19, 20],
+                [5, 9], [9, 13], [13, 17]
+            ];
+
+            calibrationCtx.strokeStyle = 'rgba(16, 185, 129, 0.6)';
+            calibrationCtx.lineWidth = 2;
+
+            for (const [i, j] of connections) {
+                const p1 = mapLandmarkToDisplay(landmarks[i], calibrationVideo, width, height);
+                const p2 = mapLandmarkToDisplay(landmarks[j], calibrationVideo, width, height);
+                const x1 = p1.x, y1 = p1.y, x2 = p2.x, y2 = p2.y;
+
+                calibrationCtx.beginPath();
+                calibrationCtx.moveTo(x1, y1);
+                calibrationCtx.lineTo(x2, y2);
+                calibrationCtx.stroke();
+            }
+
+            calibrationCtx.fillStyle = 'rgba(255, 255, 255, 0.8)';
+            for (const landmark of landmarks) {
+                const { x, y } = mapLandmarkToDisplay(landmark, calibrationVideo, width, height);
+                calibrationCtx.beginPath();
+                calibrationCtx.arc(x, y, 3, 0, Math.PI * 2);
+                calibrationCtx.fill();
+            }
+
+            // 食指指尖位置和圆圈半径
+            const tip = landmarks[8];
+            const { x: tx, y: ty } = mapLandmarkToDisplay(tip, calibrationVideo, width, height);
+            
+            // 绘制圆圈半径（使用config.threshold作为半径）
+            const radius = config.threshold;
+            calibrationCtx.strokeStyle = '#10b981';
+            calibrationCtx.lineWidth = 2;
+            calibrationCtx.setLineDash([5, 5]); // 虚线
+            calibrationCtx.beginPath();
+            calibrationCtx.arc(tx, ty, radius, 0, Math.PI * 2);
+            calibrationCtx.stroke();
+            calibrationCtx.setLineDash([]); // 恢复实线
+            
+            // 绘制指尖中心点
+            calibrationCtx.fillStyle = '#10b981';
+            calibrationCtx.beginPath();
+            calibrationCtx.arc(tx, ty, 10, 0, Math.PI * 2);
+            calibrationCtx.fill();
+            
+            // 返回指尖位置用于碰撞检测
+            return { x: tx, y: ty, radius: radius };
+        }
+
+        function drawCalibrationMole() {
+            const m = calibrationMole;
+            
+            // 绘制地鼠边框
+            calibrationCtx.strokeStyle = m.hit ? '#f87171' : 'rgba(255,255,255,0.8)';
+            calibrationCtx.lineWidth = 4;
+            calibrationCtx.lineCap = 'round';
+            calibrationCtx.strokeRect(m.x - m.size/2, m.y - m.size/2, m.size, m.size);
+            
+            // 绘制地鼠图标或爆炸效果
+            calibrationCtx.font = "50px Arial";
+            calibrationCtx.textAlign = "center";
+            calibrationCtx.textBaseline = "middle";
+            
+            if (m.hit && m.hitAnimationTime > 0) {
+                // 爆炸效果
+                const scale = 1 + (500 - m.hitAnimationTime) / 500 * 0.5; // 放大动画
+                calibrationCtx.save();
+                calibrationCtx.translate(m.x, m.y);
+                calibrationCtx.scale(scale, scale);
+                calibrationCtx.fillText("💥", 0, 0);
+                calibrationCtx.restore();
+                m.hitAnimationTime -= 16; // 每帧减少16ms
+                
+                if (m.hitAnimationTime <= 0) {
+                    m.hit = false;
+                }
+            } else {
+                // 正常地鼠图标
+                calibrationCtx.fillText("🐹", m.x, m.y);
+            }
+        }
+
+        function checkCalibrationHit(fingerTip) {
+            const m = calibrationMole;
+            const r = fingerTip.radius;
+            
+            // 检测食指圆圈是否与地鼠检测范围重合
+            // 地鼠的检测范围：地鼠中心 ± (size/2 + r)
+            const moleLeft = m.x - m.size/2 - r;
+            const moleRight = m.x + m.size/2 + r;
+            const moleTop = m.y - m.size/2 - r;
+            const moleBottom = m.y + m.size/2 + r;
+            
+            const fingerX = fingerTip.x;
+            const fingerY = fingerTip.y;
+            
+            // 检查指尖中心点是否在地鼠检测范围内
+            if (fingerX >= moleLeft && fingerX <= moleRight && 
+                fingerY >= moleTop && fingerY <= moleBottom) {
+                if (!m.hit) {
+                    m.hit = true;
+                    m.hitAnimationTime = 500; // 爆炸动画持续500ms
+                }
+            } else {
+                // 离开检测区，恢复地鼠图标
+                if (m.hit && m.hitAnimationTime <= 0) {
+                    m.hit = false;
+                }
+            }
+        }
+
+        function onCalibrationResults(results) {
+            if (!calibrationActive) return;
+
+            calibrationCtx.clearRect(0, 0, calibrationCanvas.width, calibrationCanvas.height);
+
+            const handsLandmarks = results.multiHandLandmarks || [];
+            const count = handsLandmarks.length;
+
+            calibrationStatus.innerText = count > 0 ? '已识别到手部' : '未识别到手部';
+            calibrationHandCount.innerText = count.toString();
+
+            // 绘制地鼠图标
+            drawCalibrationMole();
+
+            if (count > 0) {
+                // 绘制手部骨架和食指圆圈，并获取指尖位置
+                const fingerTips = [];
+                handsLandmarks.forEach(landmarks => {
+                    const tip = drawCalibrationHand(landmarks);
+                    if (tip) {
+                        fingerTips.push(tip);
+                    }
+                });
+                
+                // 检测碰撞
+                fingerTips.forEach(tip => {
+                    checkCalibrationHit(tip);
+                });
+            }
+        }
+
+        // 启动校准预览（基于 MediaPipe 手势识别）
+        async function startCalibrationPreview() {
+            try {
+                calibrationStream = await navigator.mediaDevices.getUserMedia({
+                    video: { width: {ideal: 320}, height: {ideal: 180}, facingMode: "user" }
+                });
+                calibrationVideo.srcObject = calibrationStream;
+
+                calibrationVideo.onloadedmetadata = () => {
+                    const box = calibrationCanvas.parentElement;
+                    calibrationCanvas.width = box ? box.clientWidth : calibrationVideo.videoWidth;
+                    calibrationCanvas.height = box ? box.clientHeight : calibrationVideo.videoHeight;
+
+                    // 初始化地鼠位置
+                    calibrationMole.x = calibrationCanvas.width / 2;
+                    calibrationMole.y = calibrationCanvas.height / 2;
+                    calibrationMole.hit = false;
+                    calibrationMole.hitAnimationTime = 0;
+
+                    calibrationActive = true;
+
+                    document.getElementById('calibration-placeholder').classList.add('hidden');
+                    document.getElementById('start-calibration-btn').classList.add('hidden');
+                    document.getElementById('stop-calibration-btn').classList.remove('hidden');
+
+                    if (!calibrationHands) {
+                        initCalibrationHands();
+                    }
+
+                    runCalibrationLoop();
+                };
+            } catch (err) {
+                alert('无法访问摄像头，请确保已授予摄像头权限。');
+            }
+        }
+
+        // 停止校准预览
+        function stopCalibrationPreview() {
+            calibrationActive = false;
+
+            if (calibrationStream) {
+                calibrationStream.getTracks().forEach(track => track.stop());
+                calibrationStream = null;
+            }
+
+            calibrationVideo.srcObject = null;
+            calibrationCtx.clearRect(0, 0, calibrationCanvas.width, calibrationCanvas.height);
+
+            // 重置地鼠状态
+            calibrationMole.x = 0;
+            calibrationMole.y = 0;
+            calibrationMole.hit = false;
+            calibrationMole.hitAnimationTime = 0;
+
+            document.getElementById('calibration-placeholder').classList.remove('hidden');
+            document.getElementById('start-calibration-btn').classList.remove('hidden');
+            document.getElementById('stop-calibration-btn').classList.add('hidden');
+
+            calibrationStatus.innerText = '未开始预览';
+            calibrationHandCount.innerText = '0';
+        }
+
+        async function runCalibrationLoop() {
+            if (!calibrationActive || !calibrationHands) return;
+
+            if (calibrationVideo.readyState >= 2) {
+                await calibrationHands.send({ image: calibrationVideo });
+            }
+
+            requestAnimationFrame(runCalibrationLoop);
+        }
+
+        window.addEventListener('load', () => {
+            setupCanvas();
+            bindLayoutObserver();
+            document.getElementById('input-x-offset').value = config.xOffset;
+            document.getElementById('val-x-offset').innerText = config.xOffset;
+            document.getElementById('input-game-x-offset').value = config.gameXOffset;
+            document.getElementById('val-game-x-offset').innerText = config.gameXOffset;
+        });
+    </script>
+</body>
+</html>
