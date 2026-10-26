@@ -4,7 +4,6 @@
 A browser-based gesture interaction prototype built with MediaPipe Hands.
 
 玩家可以通过摄像头实时追踪手部关键点，并用食指位置击打屏幕中的地鼠。
-
 The game tracks hand landmarks from the webcam in real time and maps the index fingertip position to a whack-a-mole interaction.
 
 ## 项目定位 / Project Positioning
